@@ -1,5 +1,20 @@
 # Meta I-JEPA Downstream Semantic Hole Reconstruction 개발 계획
 
+
+## 0. 진행 현황 업데이트
+
+### 이번 작업에서 완료한 내용
+- `train/train_semantic_inpaint.py`에 TensorBoard `SummaryWriter` 기반 로그 경로를 추가해 dry-run 학습 메트릭과 stage/config 메타데이터를 기록할 수 있도록 했다.
+- CLI 옵션(`--log-dir`, `--global-step`, `--disable-tensorboard`)을 추가해 로컬 실험 시 로그 저장 위치와 기록 여부를 제어할 수 있도록 했다.
+- `configs/downstream_semantic_inpaint.yaml`와 `README.md`에 TensorBoard 설정/사용 방법을 문서화했다.
+
+### 남은 작업
+- 실제 데이터셋/에폭 루프 기반 학습기에도 동일한 TensorBoard 로깅 패턴을 연결하기.
+- 이미지 복원 결과, 입력 마스크, teacher/predictor 비교 시각화까지 TensorBoard image 로깅으로 확장하기.
+- 체크포인트 저장, resume, validation step을 포함한 장기 학습 모니터링 체계를 정리하기.
+
+---
+
 ## 1. 목표 정의
 
 ### 1.1 최종 목표

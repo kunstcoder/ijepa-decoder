@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 import torch
 from torch import nn
@@ -10,6 +13,11 @@ from models.decoder_baseline import ConvDecoder
 from models.hole_token_scatter import reshape_token_canvas, scatter_hole_tokens
 from models.ijepa_wrapper import IJEPAComponents, IJEPAWrapper
 from models.losses import SemanticReconstructionLoss
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ModuleNotFoundError:  # pragma: no cover - depends on optional dependency
+    SummaryWriter = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -30,6 +38,13 @@ class OptimizerConfig:
 
 
 @dataclass
+class TensorBoardConfig:
+    enabled: bool = True
+    log_dir: str = "runs/semantic_inpaint"
+    flush_secs: int = 10
+
+
+@dataclass
 class TrainConfig:
     image_size: int = 32
     patch_size: int = 8
@@ -43,6 +58,7 @@ class TrainConfig:
     ema_momentum: float = 0.996
     stage: str = "decoder_warmup"
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
 
 
 TRAINING_STAGES: dict[str, StageConfig] = {
@@ -146,7 +162,59 @@ def _build_dummy_wrapper(token_dim: int) -> IJEPAWrapper:
     )
 
 
-def run_dry_training_step(config: TrainConfig) -> dict[str, float | str]:
+def _flatten_config(prefix: str, value: Any) -> dict[str, float | str]:
+    if hasattr(value, "__dataclass_fields__"):
+        value = asdict(value)
+    if isinstance(value, dict):
+        flattened: dict[str, float | str] = {}
+        for child_key, child_value in value.items():
+            child_prefix = f"{prefix}_{child_key}" if prefix else str(child_key)
+            flattened.update(_flatten_config(child_prefix, child_value))
+        return flattened
+    if isinstance(value, Path):
+        return {prefix: str(value)}
+    return {prefix: value}
+
+
+def collect_config_metrics(config: TrainConfig) -> dict[str, float | str]:
+    return _flatten_config("", asdict(config))
+
+
+def create_tensorboard_writer(config: TensorBoardConfig) -> SummaryWriter | None:
+    if not config.enabled:
+        return None
+    if SummaryWriter is None:
+        raise RuntimeError(
+            "TensorBoard logging requires tensorboard to be installed. "
+            "Install it with `pip install tensorboard`."
+        )
+    return SummaryWriter(log_dir=config.log_dir, flush_secs=config.flush_secs)
+
+
+def log_metrics_to_tensorboard(
+    writer: SummaryWriter | None,
+    metrics: dict[str, float | str],
+    *,
+    global_step: int,
+) -> None:
+    if writer is None:
+        return
+
+    for key, value in metrics.items():
+        if isinstance(value, bool):
+            writer.add_scalar(key, int(value), global_step)
+        elif isinstance(value, (int, float)):
+            writer.add_scalar(key, value, global_step)
+        elif isinstance(value, str):
+            writer.add_text(key, value, global_step)
+
+
+def run_dry_training_step(
+    config: TrainConfig,
+    *,
+    writer: SummaryWriter | None = None,
+    global_step: int = 0,
+) -> dict[str, float | str]:
     grid_size = config.image_size // config.patch_size
     num_patches = grid_size * grid_size
     num_holes = num_patches // 4
@@ -191,7 +259,7 @@ def run_dry_training_step(config: TrainConfig) -> dict[str, float | str]:
         wrapper.update_target_encoder(momentum=config.ema_momentum)
 
     metrics: dict[str, float | str] = {
-        **asdict(config),
+        **collect_config_metrics(config),
         "stage_name": stage.name,
         "ema_update_applied": float(stage.update_target_encoder),
         "context_mean": float(context_images.mean()),
@@ -203,10 +271,41 @@ def run_dry_training_step(config: TrainConfig) -> dict[str, float | str]:
         "target_encoder_trainable": float(any(parameter.requires_grad for parameter in wrapper.target_encoder.parameters())),
     }
     metrics.update(summarize_optimizer(optimizer))
+    log_metrics_to_tensorboard(writer, metrics, global_step=global_step)
     return metrics
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run a dry semantic inpainting training step.")
+    parser.add_argument("--global-step", type=int, default=0, help="Global step used for TensorBoard logging.")
+    parser.add_argument(
+        "--disable-tensorboard",
+        action="store_true",
+        help="Skip TensorBoard writer creation even when the config enables it.",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=str,
+        default=None,
+        help="Override the TensorBoard log directory for this run.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    metrics = run_dry_training_step(TrainConfig())
+    arguments = parse_args()
+    config = TrainConfig()
+    if arguments.disable_tensorboard:
+        config.tensorboard.enabled = False
+    if arguments.log_dir is not None:
+        config.tensorboard.log_dir = arguments.log_dir
+
+    writer = create_tensorboard_writer(config.tensorboard)
+    try:
+        metrics = run_dry_training_step(config, writer=writer, global_step=arguments.global_step)
+    finally:
+        if writer is not None:
+            writer.close()
+
     for key, value in metrics.items():
         print(f"{key}: {value}")
