@@ -6,7 +6,14 @@ from torch import nn
 from data.mask_samplers import PatchMaskConverter, apply_pixel_mask
 from models.hole_token_scatter import reshape_token_canvas, scatter_hole_tokens
 from models.ijepa_wrapper import IJEPAComponents, IJEPAWrapper, LinearProjection
-from train.train_semantic_inpaint import TrainConfig, run_dry_training_step
+from train.train_semantic_inpaint import (
+    TRAINING_STAGES,
+    TrainConfig,
+    build_optimizer,
+    configure_training_stage,
+    resolve_stage_config,
+    run_dry_training_step,
+)
 
 
 def test_patch_mask_converter_marks_holes() -> None:
@@ -92,3 +99,61 @@ def test_dry_training_step_runs() -> None:
     assert metrics["reconstruction_loss"] >= 0.0
     assert metrics["encoder_trainable"] == 0.0
     assert metrics["predictor_trainable"] == 0.0
+
+
+def test_stage_configuration_for_predictor_finetune() -> None:
+    encoder = nn.Linear(2, 2, bias=False)
+    predictor = nn.Linear(2, 2, bias=False)
+    target_encoder = nn.Linear(2, 2, bias=False)
+    wrapper = IJEPAWrapper(
+        IJEPAComponents(
+            encoder=encoder,
+            predictor=predictor,
+            target_encoder=target_encoder,
+        )
+    )
+
+    stage = configure_training_stage(wrapper, TrainConfig(stage="predictor_finetune"))
+
+    assert stage == TRAINING_STAGES["predictor_finetune"]
+    assert all(not parameter.requires_grad for parameter in wrapper.encoder.parameters())
+    assert all(parameter.requires_grad for parameter in wrapper.predictor.parameters())
+    assert all(not parameter.requires_grad for parameter in wrapper.target_encoder.parameters())
+
+
+def test_resolve_stage_config_rejects_unknown_stage() -> None:
+    try:
+        resolve_stage_config(TrainConfig(stage="unknown"))
+    except ValueError as error:
+        assert "Unknown training stage" in str(error)
+    else:
+        raise AssertionError("Expected unknown stage to raise ValueError")
+
+
+def test_build_optimizer_only_includes_trainable_modules() -> None:
+    encoder = nn.Linear(2, 2)
+    predictor = nn.Linear(2, 2)
+    target_encoder = nn.Linear(2, 2)
+    decoder = nn.Linear(2, 2)
+    wrapper = IJEPAWrapper(
+        IJEPAComponents(
+            encoder=encoder,
+            predictor=predictor,
+            target_encoder=target_encoder,
+        )
+    )
+    configure_training_stage(wrapper, TrainConfig(stage="decoder_warmup"))
+
+    optimizer = build_optimizer(wrapper, decoder, TrainConfig().optimizer)
+
+    assert len(optimizer.param_groups) == 1
+    assert optimizer.param_groups[0]["name"] == "decoder"
+
+
+def test_dry_training_step_predictor_stage_reports_optimizer_groups() -> None:
+    metrics = run_dry_training_step(TrainConfig(stage="predictor_finetune"))
+    assert metrics["stage_name"] == "predictor_finetune"
+    assert metrics["predictor_trainable"] == 1.0
+    assert metrics["encoder_trainable"] == 0.0
+    assert metrics["ema_update_applied"] == 1.0
+    assert metrics["optimizer_param_groups"] == 2.0

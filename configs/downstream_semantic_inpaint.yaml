@@ -4,6 +4,7 @@ token_dim: 16
 batch_size: 2
 lambda_jepa: 1.0
 lambda_rgb: 0.5
+stage: decoder_warmup
 freeze:
   encoder: true
   predictor: true
@@ -16,3 +17,15 @@ masking:
 ema:
   enabled: false
   momentum: 0.996
+optimizer:
+  encoder_lr: 1.0e-5
+  predictor_lr: 5.0e-5
+  decoder_lr: 1.0e-4
+  weight_decay: 0.0
+stages:
+  decoder_warmup:
+    description: Train decoder only while keeping encoder, predictor, and teacher frozen.
+  predictor_finetune:
+    description: Train predictor + decoder with EMA teacher updates while encoder stays frozen.
+  end_to_end:
+    description: Unfreeze encoder and predictor for low-LR end-to-end adaptation with EMA teacher updates.
