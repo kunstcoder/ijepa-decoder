@@ -1,0 +1,15 @@
+image_size: 32
+patch_size: 8
+token_dim: 16
+batch_size: 2
+lambda_jepa: 1.0
+lambda_rgb: 0.5
+freeze:
+  encoder: true
+  predictor: true
+  target_encoder: true
+decoder:
+  hidden_dim: 256
+masking:
+  sampler: patch_aligned_box
+  pixel_mask_before_patchify: true
