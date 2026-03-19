@@ -57,6 +57,8 @@ class TrainConfig:
     freeze_target_encoder: bool = True
     ema_momentum: float = 0.996
     stage: str = "decoder_warmup"
+    ijepa_checkpoint: str | None = None
+    checkpoint_strict: bool = False
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
 
@@ -162,6 +164,15 @@ def _build_dummy_wrapper(token_dim: int) -> IJEPAWrapper:
     )
 
 
+def build_wrapper(config: TrainConfig) -> IJEPAWrapper:
+    if config.ijepa_checkpoint is None:
+        return _build_dummy_wrapper(config.token_dim)
+    return IJEPAWrapper.from_checkpoint(
+        checkpoint_path=config.ijepa_checkpoint,
+        strict=config.checkpoint_strict,
+    )
+
+
 def _flatten_config(prefix: str, value: Any) -> dict[str, float | str]:
     if hasattr(value, "__dataclass_fields__"):
         value = asdict(value)
@@ -231,7 +242,7 @@ def run_dry_training_step(
     visible_indices = patch_mask.visible_indices[:, :num_visible].clamp_min(0)
     hole_indices = patch_mask.hole_indices[:, :num_holes].clamp_min(0)
 
-    wrapper = _build_dummy_wrapper(config.token_dim)
+    wrapper = build_wrapper(config)
     stage = configure_training_stage(wrapper, config)
 
     visible_tokens = wrapper.encode_context(torch.randn(config.batch_size, num_visible, config.token_dim))
@@ -261,6 +272,7 @@ def run_dry_training_step(
     metrics: dict[str, float | str] = {
         **collect_config_metrics(config),
         "stage_name": stage.name,
+        "ijepa_checkpoint_loaded": float(config.ijepa_checkpoint is not None),
         "ema_update_applied": float(stage.update_target_encoder),
         "context_mean": float(context_images.mean()),
         "semantic_loss": float(loss.semantic),
@@ -279,6 +291,23 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a dry semantic inpainting training step.")
     parser.add_argument("--global-step", type=int, default=0, help="Global step used for TensorBoard logging.")
     parser.add_argument(
+        "--stage",
+        choices=sorted(TRAINING_STAGES),
+        default=None,
+        help="Training stage preset to apply before building the optimizer.",
+    )
+    parser.add_argument(
+        "--ijepa-checkpoint",
+        type=str,
+        default=None,
+        help="Optional path to a pretrained I-JEPA checkpoint used to initialize encoder/predictor/target_encoder.",
+    )
+    parser.add_argument(
+        "--strict-checkpoint",
+        action="store_true",
+        help="Enable strict state-dict loading when --ijepa-checkpoint is provided.",
+    )
+    parser.add_argument(
         "--disable-tensorboard",
         action="store_true",
         help="Skip TensorBoard writer creation even when the config enables it.",
@@ -295,6 +324,12 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     arguments = parse_args()
     config = TrainConfig()
+    if arguments.stage is not None:
+        config.stage = arguments.stage
+    if arguments.ijepa_checkpoint is not None:
+        config.ijepa_checkpoint = arguments.ijepa_checkpoint
+    if arguments.strict_checkpoint:
+        config.checkpoint_strict = True
     if arguments.disable_tensorboard:
         config.tensorboard.enabled = False
     if arguments.log_dir is not None:

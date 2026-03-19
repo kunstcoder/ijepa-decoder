@@ -256,6 +256,61 @@ What it does:
 
 This is currently the main executable training-related script in the repository.
 
+### I-JEPA 사전학습 체크포인트로 시작하기
+
+`train/train_semantic_inpaint.py`는 이제 `--ijepa-checkpoint` 인자를 받아, 체크포인트에서 `encoder`, `predictor`, `target_encoder` 가중치를 읽어 dry-run 학습 경로를 초기화할 수 있습니다.
+
+가장 기본적인 실행 예시는 다음과 같습니다.
+
+```bash
+python train/train_semantic_inpaint.py \
+  --ijepa-checkpoint /path/to/ijepa_checkpoint.pt \
+  --stage predictor_finetune \
+  --log-dir runs/ijepa_predictor_finetune
+```
+
+옵션 설명:
+
+- `--ijepa-checkpoint`
+  - I-JEPA 사전학습 체크포인트 경로입니다.
+  - 내부적으로 `IJEPAWrapper.from_checkpoint(...)`를 호출해 `encoder`, `predictor`, `target_encoder`를 구성합니다.
+- `--stage`
+  - `decoder_warmup`, `predictor_finetune`, `end_to_end` 중 하나를 선택합니다.
+  - 보통 사전학습 체크포인트를 활용할 때는 먼저 `predictor_finetune` 또는 `end_to_end`로 시작합니다.
+- `--strict-checkpoint`
+  - state dict key가 완전히 일치해야만 로딩하도록 강제합니다.
+  - 공식 체크포인트 구조를 정확히 맞춘 경우에만 켜는 것을 권장합니다.
+
+실행이 끝나면 출력 메트릭에 다음 항목이 포함됩니다.
+
+- `ijepa_checkpoint_loaded`
+  - 체크포인트가 실제로 주입되었으면 `1.0`,
+  - 더미 래퍼로 실행했으면 `0.0`.
+
+### 공식/실제 I-JEPA 체크포인트를 사용할 때의 주의사항
+
+현재 저장소는 **다운스트림 프로토타입**이므로, checkpoint loader는 다음 두 경우를 우선 지원합니다.
+
+1. 컴포넌트별 state dict가 이미 분리된 경우
+2. `encoder.*`, `predictor.*`, `target_encoder.*` 같은 prefix를 가진 flat state dict인 경우
+
+예를 들어 아래처럼 저장된 체크포인트를 바로 읽을 수 있습니다.
+
+```python
+checkpoint = {
+    "state_dict": {
+        "encoder.proj.weight": ...,
+        "encoder.proj.bias": ...,
+        "predictor.proj.weight": ...,
+        "predictor.proj.bias": ...,
+        "target_encoder.proj.weight": ...,
+        "target_encoder.proj.bias": ...,
+    }
+}
+```
+
+반대로, 실제 I-JEPA 체크포인트가 저장소 밖의 아키텍처 정의에 의존하거나 키 이름이 크게 다르면 이 저장소의 generic loader만으로는 바로 로딩되지 않을 수 있습니다. 그런 경우에는 `models/ijepa_wrapper.py`의 `IJEPAWrapper.from_checkpoint(...)`에 `module_factories`를 넘겨 실제 backbone/predictor 클래스를 연결하는 방식으로 확장하면 됩니다.
+
 
 ### TensorBoard monitoring
 
@@ -342,6 +397,14 @@ from models.ijepa_wrapper import IJEPAWrapper
 wrapper = IJEPAWrapper.from_checkpoint("path/to/checkpoint.pt")
 ```
 
+CLI에서 바로 쓰고 싶다면:
+
+```bash
+python train/train_semantic_inpaint.py \
+  --ijepa-checkpoint path/to/checkpoint.pt \
+  --stage predictor_finetune
+```
+
 If the checkpoint structure does not match the fallback inference logic, you can extend the loader by passing explicit `module_factories` for `encoder`, `predictor`, and `target_encoder`.
 
 ---
@@ -365,6 +428,6 @@ python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install torch pytest
-python train/train_semantic_inpaint.py
+python train/train_semantic_inpaint.py --ijepa-checkpoint /path/to/ijepa_checkpoint.pt --stage predictor_finetune
 python -m pytest
 ```
