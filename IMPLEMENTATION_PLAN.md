@@ -508,6 +508,18 @@ project/
 
 ## 진행 현황 업데이트
 
+### 현재 구현 스냅샷
+- Phase 0의 최소 실행 경로는 프로토타입 수준으로 반영되었다.
+  - `IJEPAWrapper.from_checkpoint()`를 통해 encoder / predictor / target encoder를 체크포인트에서 추출하고, 단순 linear / MLP 형태의 fallback module 추론까지 지원한다.
+  - 학습 설정은 `configs/downstream_semantic_inpaint.yaml`과 `TrainConfig` dataclass로 분리되어 있다.
+- Phase 1의 핵심인 patch-aligned mask 변환과 pixel masking 옵션이 구현되었다.
+- Phase 2~4의 핵심 경로인 hole token scatter, baseline decoder, semantic + RGB 결합 loss가 모두 연결되었다.
+- Phase 5의 staged training 초안도 구현되었다.
+  - `decoder_warmup`
+  - `predictor_finetune`
+  - `end_to_end`
+  - stage별 freeze / EMA / optimizer param group 로직이 dry-run 경로에서 검증된다.
+
 ### 완료된 작업
 - [x] Sprint 1 최소 실행 경로용 코드 스캐폴딩 추가
 - [x] patch-aligned mask 변환기 및 pixel masking 유틸 추가
@@ -515,13 +527,15 @@ project/
 - [x] semantic + hole-only RGB 결합 loss 추가
 - [x] dry-run 가능한 학습 엔트리포인트 및 기본 설정 파일 추가
 - [x] scatter 정합성과 dry-run 경로를 검증하는 테스트 추가
+- [x] checkpoint state_dict 추출 및 fallback module 기반 적재 경로 추가
+- [x] freeze/unfreeze schedule 및 optimizer parameter group 정리
+- [x] EMA target encoder 업데이트 로직 및 stage별 dry-run 검증 추가
 
 ### 다음 작업
-- [ ] freeze/unfreeze schedule 및 optimizer parameter group 정리
-- [ ] mixed mask schedule과 irregular sampler 확장
-- [ ] irregular/free-form mask sampler 추가
-- [ ] decoder warm-up / predictor fine-tuning stage 분리
-- [ ] 시각화 및 eval 스크립트 보강
+- [ ] 실제 pretrained I-JEPA checkpoint 형식에 맞춘 module factory 연결
+- [ ] README 기준의 eval / visualization 스크립트 추가
+- [ ] irregular / free-form mask sampler 및 padding-aware collator 확장
+- [ ] pooled latent 대비 patchwise latent reconstruction 비교 실험 추가
 
 ## 10. 실행 권장안 요약
 
