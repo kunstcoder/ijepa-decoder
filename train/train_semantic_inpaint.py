@@ -96,6 +96,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("checkpoint_path", type=str, help="Local path to the I-JEPA checkpoint.")
     parser.add_argument("--global-step", type=int, default=0, help="Global step used for TensorBoard logging.")
     parser.add_argument(
+        "--stage",
+        choices=sorted(TRAINING_STAGES),
+        default=None,
+        help="Training stage preset to apply before building the optimizer.",
+    )
+    parser.add_argument(
+        "--ijepa-checkpoint",
+        type=str,
+        default=None,
+        help="Optional path to a pretrained I-JEPA checkpoint used to initialize encoder/predictor/target_encoder.",
+    )
+    parser.add_argument(
+        "--strict-checkpoint",
+        action="store_true",
+        help="Enable strict state-dict loading when --ijepa-checkpoint is provided.",
+    )
+    parser.add_argument(
         "--disable-tensorboard",
         action="store_true",
         help="Skip TensorBoard writer creation even when the config enables it.",
