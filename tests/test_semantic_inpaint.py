@@ -9,6 +9,7 @@ from models.ijepa_wrapper import IJEPAComponents, IJEPAWrapper, LinearProjection
 from train.train_semantic_inpaint import (
     TRAINING_STAGES,
     TrainConfig,
+    build_wrapper,
     build_optimizer,
     collect_config_metrics,
     configure_training_stage,
@@ -68,6 +69,26 @@ def test_checkpoint_loader_extracts_flat_state_dict(tmp_path) -> None:
     assert torch.allclose(wrapper.predict_holes(sample), torch.tensor([[2.0, 3.0]]))
 
 
+def test_build_wrapper_uses_checkpoint_when_requested(tmp_path) -> None:
+    checkpoint_path = tmp_path / "ijepa.pt"
+    checkpoint = {
+        "state_dict": {
+            "encoder.proj.weight": torch.eye(2),
+            "encoder.proj.bias": torch.tensor([0.5, -0.5]),
+            "predictor.proj.weight": torch.eye(2),
+            "predictor.proj.bias": torch.tensor([1.0, 1.0]),
+            "target_encoder.proj.weight": torch.eye(2),
+            "target_encoder.proj.bias": torch.tensor([0.0, 0.0]),
+        }
+    }
+    torch.save(checkpoint, checkpoint_path)
+
+    wrapper = build_wrapper(TrainConfig(token_dim=2, ijepa_checkpoint=str(checkpoint_path)))
+
+    assert isinstance(wrapper.encoder, LinearProjection)
+    assert torch.allclose(wrapper.encode_context(torch.tensor([[1.0, 2.0]])), torch.tensor([[1.5, 1.5]]))
+
+
 def test_wrapper_trainable_flags_and_ema_update() -> None:
     encoder = nn.Linear(2, 2, bias=False)
     predictor = nn.Linear(2, 2, bias=False)
@@ -101,6 +122,7 @@ def test_dry_training_step_runs() -> None:
     assert metrics["reconstruction_loss"] >= 0.0
     assert metrics["encoder_trainable"] == 0.0
     assert metrics["predictor_trainable"] == 0.0
+    assert metrics["ijepa_checkpoint_loaded"] == 0.0
 
 
 def test_stage_configuration_for_predictor_finetune() -> None:
