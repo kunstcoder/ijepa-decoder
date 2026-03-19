@@ -29,3 +29,8 @@ stages:
     description: Train predictor + decoder with EMA teacher updates while encoder stays frozen.
   end_to_end:
     description: Unfreeze encoder and predictor for low-LR end-to-end adaptation with EMA teacher updates.
+
+tensorboard:
+  enabled: true
+  log_dir: runs/semantic_inpaint
+  flush_secs: 10

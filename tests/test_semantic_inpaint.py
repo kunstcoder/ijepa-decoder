@@ -10,7 +10,9 @@ from train.train_semantic_inpaint import (
     TRAINING_STAGES,
     TrainConfig,
     build_optimizer,
+    collect_config_metrics,
     configure_training_stage,
+    log_metrics_to_tensorboard,
     resolve_stage_config,
     run_dry_training_step,
 )
@@ -157,3 +159,28 @@ def test_dry_training_step_predictor_stage_reports_optimizer_groups() -> None:
     assert metrics["encoder_trainable"] == 0.0
     assert metrics["ema_update_applied"] == 1.0
     assert metrics["optimizer_param_groups"] == 2.0
+
+
+def test_collect_config_metrics_flattens_nested_dataclasses() -> None:
+    metrics = collect_config_metrics(TrainConfig())
+    assert metrics["optimizer_decoder_lr"] == 1.0e-4
+    assert metrics["tensorboard_log_dir"] == "runs/semantic_inpaint"
+
+
+def test_log_metrics_to_tensorboard_records_scalars_and_text() -> None:
+    class DummyWriter:
+        def __init__(self) -> None:
+            self.scalars: list[tuple[str, float, int]] = []
+            self.texts: list[tuple[str, str, int]] = []
+
+        def add_scalar(self, key: str, value: float, step: int) -> None:
+            self.scalars.append((key, float(value), step))
+
+        def add_text(self, key: str, value: str, step: int) -> None:
+            self.texts.append((key, value, step))
+
+    writer = DummyWriter()
+    log_metrics_to_tensorboard(writer, {"loss": 1.25, "stage": "decoder_warmup"}, global_step=7)
+
+    assert writer.scalars == [("loss", 1.25, 7)]
+    assert writer.texts == [("stage", "decoder_warmup", 7)]

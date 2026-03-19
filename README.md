@@ -251,9 +251,34 @@ What it does:
 - rebuilds the token canvas,
 - decodes into RGB,
 - computes the combined loss,
-- prints metrics for the selected stage.
+- prints metrics for the selected stage,
+- writes numeric metrics and stage/config metadata to TensorBoard when enabled.
 
 This is currently the main executable training-related script in the repository.
+
+
+### TensorBoard monitoring
+
+The dry-run trainer can now emit TensorBoard logs with `torch.utils.tensorboard.SummaryWriter`.
+
+Example:
+
+```bash
+python train/train_semantic_inpaint.py --log-dir runs/demo
+```
+
+Then inspect the run with:
+
+```bash
+tensorboard --logdir runs
+```
+
+Notes:
+
+- scalar metrics such as losses, optimizer learning rates, and trainable-flag summaries are logged automatically,
+- string metadata such as the active stage is stored as TensorBoard text,
+- pass `--disable-tensorboard` if you only want console output,
+- if `tensorboard` is not installed, the script raises an actionable error explaining how to install it.
 
 ### Example output fields
 
