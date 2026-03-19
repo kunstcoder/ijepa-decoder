@@ -1,36 +1,6 @@
-image_size: 32
-patch_size: 8
-token_dim: 16
-batch_size: 2
-lambda_jepa: 1.0
-lambda_rgb: 0.5
-stage: decoder_warmup
-freeze:
-  encoder: true
-  predictor: true
-  target_encoder: true
-decoder:
-  hidden_dim: 256
-masking:
-  sampler: patch_aligned_box
-  pixel_mask_before_patchify: true
-ema:
-  enabled: false
-  momentum: 0.996
-optimizer:
-  encoder_lr: 1.0e-5
-  predictor_lr: 5.0e-5
-  decoder_lr: 1.0e-4
-  weight_decay: 0.0
-stages:
-  decoder_warmup:
-    description: Train decoder only while keeping encoder, predictor, and teacher frozen.
-  predictor_finetune:
-    description: Train predictor + decoder with EMA teacher updates while encoder stays frozen.
-  end_to_end:
-    description: Unfreeze encoder and predictor for low-LR end-to-end adaptation with EMA teacher updates.
+checkpoint_path: /path/to/ijepa_checkpoint.pt
 
 tensorboard:
   enabled: true
-  log_dir: runs/semantic_inpaint
+  log_dir: runs/ijepa_checkpoint
   flush_secs: 10

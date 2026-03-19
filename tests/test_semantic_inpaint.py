@@ -1,21 +1,15 @@
 from __future__ import annotations
 
 import torch
-from torch import nn
 
 from data.mask_samplers import PatchMaskConverter, apply_pixel_mask
 from models.hole_token_scatter import reshape_token_canvas, scatter_hole_tokens
-from models.ijepa_wrapper import IJEPAComponents, IJEPAWrapper, LinearProjection
+from models.ijepa_wrapper import IJEPAWrapper
 from train.train_semantic_inpaint import (
-    TRAINING_STAGES,
     TrainConfig,
-    build_wrapper,
-    build_optimizer,
     collect_config_metrics,
-    configure_training_stage,
+    inspect_checkpoint,
     log_metrics_to_tensorboard,
-    resolve_stage_config,
-    run_dry_training_step,
 )
 
 
@@ -52,141 +46,52 @@ def test_checkpoint_loader_extracts_flat_state_dict(tmp_path) -> None:
     checkpoint = {
         "state_dict": {
             "encoder.proj.weight": torch.eye(2),
-            "encoder.proj.bias": torch.tensor([0.5, -0.5]),
             "predictor.proj.weight": torch.eye(2),
-            "predictor.proj.bias": torch.tensor([1.0, 1.0]),
             "target_encoder.proj.weight": torch.eye(2),
-            "target_encoder.proj.bias": torch.tensor([0.0, 0.0]),
         }
     }
     torch.save(checkpoint, checkpoint_path)
 
-    wrapper = IJEPAWrapper.from_checkpoint(checkpoint_path)
-    sample = torch.tensor([[1.0, 2.0]])
+    loaded = IJEPAWrapper.load(checkpoint_path)
 
-    assert isinstance(wrapper.encoder, LinearProjection)
-    assert torch.allclose(wrapper.encode_context(sample), torch.tensor([[1.5, 1.5]]))
-    assert torch.allclose(wrapper.predict_holes(sample), torch.tensor([[2.0, 3.0]]))
+    assert loaded.encoder_state["proj.weight"].shape == (2, 2)
+    assert loaded.predictor_state["proj.weight"].shape == (2, 2)
+    assert loaded.target_encoder_state["proj.weight"].shape == (2, 2)
 
 
-def test_build_wrapper_uses_checkpoint_when_requested(tmp_path) -> None:
-    checkpoint_path = tmp_path / "ijepa.pt"
+def test_checkpoint_loader_reads_nested_component_dicts(tmp_path) -> None:
+    checkpoint_path = tmp_path / "ijepa_nested.pt"
     checkpoint = {
-        "state_dict": {
-            "encoder.proj.weight": torch.eye(2),
-            "encoder.proj.bias": torch.tensor([0.5, -0.5]),
-            "predictor.proj.weight": torch.eye(2),
-            "predictor.proj.bias": torch.tensor([1.0, 1.0]),
-            "target_encoder.proj.weight": torch.eye(2),
-            "target_encoder.proj.bias": torch.tensor([0.0, 0.0]),
-        }
+        "encoder": {"proj.weight": torch.eye(2)},
+        "predictor": {"proj.weight": torch.eye(2)},
+        "teacher_encoder": {"proj.weight": torch.eye(2)},
     }
     torch.save(checkpoint, checkpoint_path)
 
-    wrapper = build_wrapper(TrainConfig(token_dim=2, ijepa_checkpoint=str(checkpoint_path)))
+    loaded = IJEPAWrapper.load(checkpoint_path)
 
-    assert isinstance(wrapper.encoder, LinearProjection)
-    assert torch.allclose(wrapper.encode_context(torch.tensor([[1.0, 2.0]])), torch.tensor([[1.5, 1.5]]))
-
-
-def test_wrapper_trainable_flags_and_ema_update() -> None:
-    encoder = nn.Linear(2, 2, bias=False)
-    predictor = nn.Linear(2, 2, bias=False)
-    target_encoder = nn.Linear(2, 2, bias=False)
-
-    with torch.no_grad():
-        encoder.weight.copy_(torch.tensor([[2.0, 0.0], [0.0, 2.0]]))
-        predictor.weight.copy_(torch.eye(2))
-        target_encoder.weight.copy_(torch.tensor([[0.0, 0.0], [0.0, 0.0]]))
-
-    wrapper = IJEPAWrapper(
-        IJEPAComponents(
-            encoder=encoder,
-            predictor=predictor,
-            target_encoder=target_encoder,
-        )
-    )
-    wrapper.set_trainable(encoder=False, predictor=True, target_encoder=False)
-
-    assert all(not parameter.requires_grad for parameter in wrapper.encoder.parameters())
-    assert all(parameter.requires_grad for parameter in wrapper.predictor.parameters())
-    assert all(not parameter.requires_grad for parameter in wrapper.target_encoder.parameters())
-
-    wrapper.update_target_encoder(momentum=0.5)
-    assert torch.allclose(wrapper.target_encoder.weight, torch.tensor([[1.0, 0.0], [0.0, 1.0]]))
+    assert loaded.summary()["encoder_loaded"] == 1.0
+    assert loaded.summary()["predictor_loaded"] == 1.0
+    assert loaded.summary()["target_encoder_loaded"] == 1.0
 
 
-def test_dry_training_step_runs() -> None:
-    metrics = run_dry_training_step(TrainConfig())
-    assert metrics["semantic_loss"] >= 0.0
-    assert metrics["reconstruction_loss"] >= 0.0
-    assert metrics["encoder_trainable"] == 0.0
-    assert metrics["predictor_trainable"] == 0.0
-    assert metrics["ijepa_checkpoint_loaded"] == 0.0
+def test_inspect_checkpoint_returns_summary_metrics(tmp_path) -> None:
+    checkpoint_path = tmp_path / "ijepa.pt"
+    torch.save({"state_dict": {"encoder.proj.weight": torch.ones(2, 2)}}, checkpoint_path)
 
+    metrics = inspect_checkpoint(TrainConfig(checkpoint_path=str(checkpoint_path)))
 
-def test_stage_configuration_for_predictor_finetune() -> None:
-    encoder = nn.Linear(2, 2, bias=False)
-    predictor = nn.Linear(2, 2, bias=False)
-    target_encoder = nn.Linear(2, 2, bias=False)
-    wrapper = IJEPAWrapper(
-        IJEPAComponents(
-            encoder=encoder,
-            predictor=predictor,
-            target_encoder=target_encoder,
-        )
-    )
-
-    stage = configure_training_stage(wrapper, TrainConfig(stage="predictor_finetune"))
-
-    assert stage == TRAINING_STAGES["predictor_finetune"]
-    assert all(not parameter.requires_grad for parameter in wrapper.encoder.parameters())
-    assert all(parameter.requires_grad for parameter in wrapper.predictor.parameters())
-    assert all(not parameter.requires_grad for parameter in wrapper.target_encoder.parameters())
-
-
-def test_resolve_stage_config_rejects_unknown_stage() -> None:
-    try:
-        resolve_stage_config(TrainConfig(stage="unknown"))
-    except ValueError as error:
-        assert "Unknown training stage" in str(error)
-    else:
-        raise AssertionError("Expected unknown stage to raise ValueError")
-
-
-def test_build_optimizer_only_includes_trainable_modules() -> None:
-    encoder = nn.Linear(2, 2)
-    predictor = nn.Linear(2, 2)
-    target_encoder = nn.Linear(2, 2)
-    decoder = nn.Linear(2, 2)
-    wrapper = IJEPAWrapper(
-        IJEPAComponents(
-            encoder=encoder,
-            predictor=predictor,
-            target_encoder=target_encoder,
-        )
-    )
-    configure_training_stage(wrapper, TrainConfig(stage="decoder_warmup"))
-
-    optimizer = build_optimizer(wrapper, decoder, TrainConfig().optimizer)
-
-    assert len(optimizer.param_groups) == 1
-    assert optimizer.param_groups[0]["name"] == "decoder"
-
-
-def test_dry_training_step_predictor_stage_reports_optimizer_groups() -> None:
-    metrics = run_dry_training_step(TrainConfig(stage="predictor_finetune"))
-    assert metrics["stage_name"] == "predictor_finetune"
-    assert metrics["predictor_trainable"] == 1.0
-    assert metrics["encoder_trainable"] == 0.0
-    assert metrics["ema_update_applied"] == 1.0
-    assert metrics["optimizer_param_groups"] == 2.0
+    assert metrics["checkpoint_path"] == str(checkpoint_path)
+    assert metrics["encoder_loaded"] == 1.0
+    assert metrics["predictor_loaded"] == 0.0
+    assert metrics["target_encoder_loaded"] == 0.0
+    assert metrics["encoder_parameter_count"] == 4.0
 
 
 def test_collect_config_metrics_flattens_nested_dataclasses() -> None:
-    metrics = collect_config_metrics(TrainConfig())
-    assert metrics["optimizer_decoder_lr"] == 1.0e-4
-    assert metrics["tensorboard_log_dir"] == "runs/semantic_inpaint"
+    metrics = collect_config_metrics(TrainConfig(checkpoint_path="/tmp/model.pt"))
+    assert metrics["checkpoint_path"] == "/tmp/model.pt"
+    assert metrics["tensorboard_log_dir"] == "runs/ijepa_checkpoint"
 
 
 def test_log_metrics_to_tensorboard_records_scalars_and_text() -> None:
@@ -202,7 +107,7 @@ def test_log_metrics_to_tensorboard_records_scalars_and_text() -> None:
             self.texts.append((key, value, step))
 
     writer = DummyWriter()
-    log_metrics_to_tensorboard(writer, {"loss": 1.25, "stage": "decoder_warmup"}, global_step=7)
+    log_metrics_to_tensorboard(writer, {"loaded": 1.0, "path": "checkpoint.pt"}, global_step=7)
 
-    assert writer.scalars == [("loss", 1.25, 7)]
-    assert writer.texts == [("stage", "decoder_warmup", 7)]
+    assert writer.scalars == [("loaded", 1.0, 7)]
+    assert writer.texts == [("path", "checkpoint.pt", 7)]
