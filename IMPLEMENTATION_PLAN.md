@@ -517,7 +517,8 @@ project/
 - [x] scatter 정합성과 dry-run 경로를 검증하는 테스트 추가
 
 ### 다음 작업
-- [ ] 실제 I-JEPA 체크포인트 구조에 맞춘 로더 구체화
+- [ ] freeze/unfreeze schedule 및 optimizer parameter group 정리
+- [ ] mixed mask schedule과 irregular sampler 확장
 - [ ] irregular/free-form mask sampler 추가
 - [ ] decoder warm-up / predictor fine-tuning stage 분리
 - [ ] 시각화 및 eval 스크립트 보강

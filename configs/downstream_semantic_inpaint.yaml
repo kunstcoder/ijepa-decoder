@@ -13,3 +13,6 @@ decoder:
 masking:
   sampler: patch_aligned_box
   pixel_mask_before_patchify: true
+ema:
+  enabled: false
+  momentum: 0.996
