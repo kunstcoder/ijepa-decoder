@@ -506,6 +506,22 @@ project/
 
 ---
 
+## 진행 현황 업데이트
+
+### 완료된 작업
+- [x] Sprint 1 최소 실행 경로용 코드 스캐폴딩 추가
+- [x] patch-aligned mask 변환기 및 pixel masking 유틸 추가
+- [x] predictor hole token scatter 유틸과 baseline conv decoder 추가
+- [x] semantic + hole-only RGB 결합 loss 추가
+- [x] dry-run 가능한 학습 엔트리포인트 및 기본 설정 파일 추가
+- [x] scatter 정합성과 dry-run 경로를 검증하는 테스트 추가
+
+### 다음 작업
+- [ ] 실제 I-JEPA 체크포인트 구조에 맞춘 로더 구체화
+- [ ] irregular/free-form mask sampler 추가
+- [ ] decoder warm-up / predictor fine-tuning stage 분리
+- [ ] 시각화 및 eval 스크립트 보강
+
 ## 10. 실행 권장안 요약
 
 가장 현실적인 첫 구현은 아래 순서다.
