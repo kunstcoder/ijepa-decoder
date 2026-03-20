@@ -17,6 +17,7 @@ from train.train_semantic_inpaint import (
     inspect_checkpoint,
     load_config,
     log_metrics_to_tensorboard,
+    log_training_previews_to_tensorboard,
     run_training,
 )
 
@@ -146,6 +147,39 @@ def test_log_metrics_to_tensorboard_records_scalars_and_text() -> None:
     assert writer.scalars == [("loaded", 1.0, 7)]
     assert writer.texts == [("path", "checkpoint.pt", 7)]
 
+
+
+
+def test_log_training_previews_to_tensorboard_records_image_batches() -> None:
+    class DummyWriter:
+        def __init__(self) -> None:
+            self.images: list[tuple[str, tuple[int, ...], int]] = []
+
+        def add_images(self, key: str, value: torch.Tensor, step: int) -> None:
+            self.images.append((key, tuple(value.shape), step))
+
+    writer = DummyWriter()
+    image = torch.rand(2, 3, 8, 8)
+    mask = torch.zeros(2, 1, 8, 8)
+    mask[:, :, :4, :4] = 1.0
+    reconstructed = torch.rand(2, 3, 8, 8)
+
+    log_training_previews_to_tensorboard(
+        writer,
+        input_image=image,
+        binary_mask=mask,
+        reconstructed_image=reconstructed,
+        global_step=5,
+        max_images=1,
+    )
+
+    assert writer.images == [
+        ("train/images/input", (1, 3, 8, 8), 5),
+        ("train/images/mask", (1, 3, 8, 8), 5),
+        ("train/images/masked_input", (1, 3, 8, 8), 5),
+        ("train/images/reconstruction", (1, 3, 8, 8), 5),
+        ("train/images/comparison", (1, 3, 8, 32), 5),
+    ]
 
 def test_random_block_mask_sampler_marks_square_region() -> None:
     sampler = RandomBlockMaskSampler(image_size=16, patch_size=4, min_hole_patches=1, max_hole_patches=2)
