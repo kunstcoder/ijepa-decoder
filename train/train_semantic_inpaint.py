@@ -39,6 +39,8 @@ class TensorBoardConfig:
     enabled: bool = True
     log_dir: str = "runs/semantic_inpaint"
     flush_secs: int = 10
+    image_log_interval: int = 50
+    max_images: int = 4
 
 
 @dataclass
@@ -377,6 +379,39 @@ def log_metrics_to_tensorboard(
             writer.add_text(key, value, global_step)
 
 
+def _prepare_image_preview_batch(images: torch.Tensor, max_images: int) -> torch.Tensor:
+    preview = images[:max(1, max_images)].detach().cpu().float()
+    return preview.clamp(0.0, 1.0)
+
+
+def log_training_previews_to_tensorboard(
+    writer: SummaryWriter | None,
+    *,
+    input_image: torch.Tensor,
+    binary_mask: torch.Tensor,
+    reconstructed_image: torch.Tensor,
+    global_step: int,
+    max_images: int,
+) -> None:
+    if writer is None:
+        return
+
+    input_preview = _prepare_image_preview_batch(input_image, max_images)
+    reconstruction_preview = _prepare_image_preview_batch(reconstructed_image, max_images)
+    mask_preview = _prepare_image_preview_batch(binary_mask.expand(-1, 3, -1, -1), max_images)
+    masked_preview = _prepare_image_preview_batch(input_image * (1.0 - binary_mask), max_images)
+    comparison_preview = torch.cat(
+        [input_preview, mask_preview, masked_preview, reconstruction_preview],
+        dim=-1,
+    )
+
+    writer.add_images("train/images/input", input_preview, global_step)
+    writer.add_images("train/images/mask", mask_preview, global_step)
+    writer.add_images("train/images/masked_input", masked_preview, global_step)
+    writer.add_images("train/images/reconstruction", reconstruction_preview, global_step)
+    writer.add_images("train/images/comparison", comparison_preview, global_step)
+
+
 def inspect_checkpoint(
     config: TrainConfig,
     *,
@@ -427,6 +462,8 @@ def train_one_epoch(
     steps_per_epoch: int | None,
     progress_enabled: bool,
     progress_refresh_rate: int,
+    image_log_interval: int,
+    max_preview_images: int,
 ) -> dict[str, float]:
     model.train()
     running = {"loss": 0.0, "semantic_loss": 0.0, "reconstruction_loss": 0.0}
@@ -470,6 +507,15 @@ def train_one_epoch(
             global_step=global_step,
         )
         total_steps += 1
+        if writer is not None and step_index % max(1, image_log_interval) == 0:
+            log_training_previews_to_tensorboard(
+                writer,
+                input_image=image,
+                binary_mask=outputs["binary_mask"],
+                reconstructed_image=outputs["reconstructed_image"],
+                global_step=global_step,
+                max_images=max(1, max_preview_images),
+            )
         if progress_bar is not None:
             progress_bar.update(1)
             if step_index % max(1, progress_refresh_rate) == 0:
@@ -544,6 +590,8 @@ def run_training(config: TrainConfig, *, writer: SummaryWriter | None = None) ->
             steps_per_epoch=config.steps_per_epoch,
             progress_enabled=config.progress.enabled,
             progress_refresh_rate=config.progress.refresh_rate,
+            image_log_interval=config.tensorboard.image_log_interval,
+            max_preview_images=config.tensorboard.max_images,
         )
         summary.update({f"epoch_{epoch_index}_{key}": value for key, value in epoch_metrics.items()})
 

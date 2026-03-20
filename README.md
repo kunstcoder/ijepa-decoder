@@ -93,6 +93,8 @@ tensorboard:
   enabled: true
   log_dir: runs/semantic_inpaint
   flush_secs: 10
+  image_log_interval: 50
+  max_images: 4
 
 progress:
   enabled: true
@@ -161,10 +163,14 @@ checkpoint_path: /path/to/ijepa_checkpoint.pt
 - `train/loss`
 - `train/semantic_loss`
 - `train/reconstruction_loss`
+- `train/images/input`, `train/images/mask`, `train/images/masked_input`, `train/images/reconstruction`, `train/images/comparison`
 
 ---
 
 ## TensorBoard
+
+학습 중에는 TensorBoard의 Images 탭에서 원본 이미지, hole mask, mask 적용 입력, 복원 결과, 그리고 이들을 가로로 이어 붙인 비교 스트립을 확인할 수 있다. 기본값으로는 50 step마다 최대 4장까지 기록하며, `tensorboard.image_log_interval`, `tensorboard.max_images`로 조절할 수 있다.
+
 
 ```bash
 tensorboard --logdir runs

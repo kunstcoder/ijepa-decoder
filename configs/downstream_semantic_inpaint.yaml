@@ -9,6 +9,8 @@ tensorboard:
   enabled: true
   log_dir: runs/semantic_inpaint
   flush_secs: 10
+  image_log_interval: 50
+  max_images: 4
 
 progress:
   enabled: true
