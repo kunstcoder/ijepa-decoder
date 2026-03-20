@@ -1,6 +1,35 @@
-checkpoint_path: /path/to/ijepa_checkpoint.pt
+checkpoint_path: ""
+image_dir: data/train_images
+epochs: 10
+steps_per_epoch: null
+seed: 0
+device: cpu
 
 tensorboard:
   enabled: true
-  log_dir: runs/ijepa_checkpoint
+  log_dir: runs/semantic_inpaint
   flush_secs: 10
+
+data:
+  image_dir: data/train_images
+  image_size: 64
+  batch_size: 8
+  num_workers: 0
+  shuffle: true
+
+mask:
+  patch_size: 16
+  min_hole_patches: 1
+  max_hole_patches: 4
+
+model:
+  token_dim: 128
+  decoder_hidden_dim: 256
+
+optimizer:
+  lr: 0.001
+  weight_decay: 0.0001
+
+loss:
+  lambda_jepa: 1.0
+  lambda_rgb: 0.5
