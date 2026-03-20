@@ -24,8 +24,8 @@
   - patch 단위 정사각형 hole mask를 무작위 생성한다.
 - `SemanticInpaintingModel`
   - patch tokenizer
-  - context predictor
-  - convolution decoder
+  - transformer + cross-attention context predictor
+  - progressive convolution decoder
   - 를 묶어서 hole token 예측 + 복원 이미지를 만든다.
 - `run_training(...)`
   - DataLoader 생성

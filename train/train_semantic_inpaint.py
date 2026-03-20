@@ -196,19 +196,53 @@ class PatchTokenizer(nn.Module):
 
 
 class ContextPredictor(nn.Module):
-    def __init__(self, token_dim: int, num_patches: int) -> None:
+    def __init__(self, token_dim: int, num_patches: int, num_heads: int = 4, depth: int = 2) -> None:
         super().__init__()
+        if token_dim % num_heads != 0:
+            raise ValueError("token_dim must be divisible by num_heads")
         self.position = nn.Embedding(num_patches, token_dim)
-        self.net = nn.Sequential(
-            nn.Linear(token_dim * 2, token_dim),
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=token_dim,
+            nhead=num_heads,
+            dim_feedforward=token_dim * 4,
+            dropout=0.0,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.visible_encoder = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=token_dim,
+            num_heads=num_heads,
+            dropout=0.0,
+            batch_first=True,
+        )
+        self.output = nn.Sequential(
+            nn.LayerNorm(token_dim),
+            nn.Linear(token_dim, token_dim * 2),
             nn.GELU(),
-            nn.Linear(token_dim, token_dim),
+            nn.Linear(token_dim * 2, token_dim),
         )
 
-    def forward(self, context_tokens: torch.Tensor, hole_indices: torch.Tensor) -> torch.Tensor:
-        position_tokens = self.position(hole_indices.clamp_min(0))
-        context = context_tokens.unsqueeze(1).expand_as(position_tokens)
-        return self.net(torch.cat([context, position_tokens], dim=-1))
+    def forward(
+        self,
+        visible_tokens: torch.Tensor,
+        visible_indices: torch.Tensor,
+        hole_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        visible_padding_mask = visible_indices < 0
+        encoded_visible = visible_tokens + self.position(visible_indices.clamp_min(0))
+        encoded_visible = self.visible_encoder(encoded_visible, src_key_padding_mask=visible_padding_mask)
+
+        hole_queries = self.position(hole_indices.clamp_min(0))
+        attended_holes, _ = self.cross_attention(
+            query=hole_queries,
+            key=encoded_visible,
+            value=encoded_visible,
+            key_padding_mask=visible_padding_mask,
+            need_weights=False,
+        )
+        return self.output(attended_holes + hole_queries)
 
 
 class SemanticInpaintingModel(nn.Module):
@@ -220,7 +254,12 @@ class SemanticInpaintingModel(nn.Module):
         self.num_patches = self.grid_size * self.grid_size
         self.tokenizer = PatchTokenizer(patch_size=patch_size, token_dim=token_dim)
         self.predictor = ContextPredictor(token_dim=token_dim, num_patches=self.num_patches)
-        self.decoder = ConvDecoder(token_dim=token_dim, output_channels=3, hidden_dim=decoder_hidden_dim)
+        self.decoder = ConvDecoder(
+            token_dim=token_dim,
+            output_channels=3,
+            hidden_dim=decoder_hidden_dim,
+            upsample_factor=patch_size,
+        )
 
     def forward(self, image: torch.Tensor, binary_mask: torch.Tensor) -> dict[str, torch.Tensor]:
         patch_converter = PatchMaskConverter(patch_size=self.patch_size)
@@ -235,9 +274,11 @@ class SemanticInpaintingModel(nn.Module):
             1,
             visible_indices.unsqueeze(-1).expand(-1, -1, visible_tokens.size(-1)),
         )
-        visible_counts = (~patch_mask.patch_mask).sum(dim=1).clamp_min(1)
-        context_tokens = gathered_visible_tokens.sum(dim=1) / visible_counts.unsqueeze(-1)
-        predicted_hole_tokens = self.predictor(context_tokens, patch_mask.hole_indices)
+        predicted_hole_tokens = self.predictor(
+            gathered_visible_tokens,
+            patch_mask.visible_indices,
+            patch_mask.hole_indices,
+        )
 
         hole_indices = patch_mask.hole_indices.clamp_min(0)
         teacher_hole_tokens = teacher_tokens.gather(
@@ -254,12 +295,6 @@ class SemanticInpaintingModel(nn.Module):
         )
         token_grid = reshape_token_canvas(token_canvas.tokens, (self.grid_size, self.grid_size))
         reconstructed = self.decoder(token_grid)
-        reconstructed = torch.nn.functional.interpolate(
-            reconstructed,
-            size=image.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
 
         return {
             "predicted_hole_tokens": predicted_hole_tokens,
