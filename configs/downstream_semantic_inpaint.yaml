@@ -10,6 +10,10 @@ tensorboard:
   log_dir: runs/semantic_inpaint
   flush_secs: 10
 
+progress:
+  enabled: true
+  refresh_rate: 1
+
 data:
   image_dir: data/train_images
   image_size: 64
