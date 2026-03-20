@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import numpy as np
+from PIL import Image
 import torch
 
 from data.mask_samplers import PatchMaskConverter, apply_pixel_mask
 from models.hole_token_scatter import reshape_token_canvas, scatter_hole_tokens
 from models.ijepa_wrapper import IJEPAWrapper
 from train.train_semantic_inpaint import (
+    RandomBlockMaskSampler,
+    SemanticInpaintingModel,
     TrainConfig,
+    build_dataloader,
     collect_config_metrics,
     inspect_checkpoint,
+    load_config,
     log_metrics_to_tensorboard,
+    run_training,
 )
 
 
@@ -91,7 +98,32 @@ def test_inspect_checkpoint_returns_summary_metrics(tmp_path) -> None:
 def test_collect_config_metrics_flattens_nested_dataclasses() -> None:
     metrics = collect_config_metrics(TrainConfig(checkpoint_path="/tmp/model.pt"))
     assert metrics["checkpoint_path"] == "/tmp/model.pt"
-    assert metrics["tensorboard_log_dir"] == "runs/ijepa_checkpoint"
+    assert metrics["tensorboard_log_dir"] == "runs/semantic_inpaint"
+
+
+def test_load_config_reads_yaml_and_normalizes_image_dir(tmp_path) -> None:
+    config_path = tmp_path / "train.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "image_dir: /tmp/images",
+                "epochs: 3",
+                "data:",
+                "  image_size: 32",
+                "  batch_size: 2",
+                "tensorboard:",
+                "  enabled: false",
+            ]
+        )
+    )
+
+    config = load_config(config_path)
+
+    assert config.image_dir == "/tmp/images"
+    assert config.data.image_dir == "/tmp/images"
+    assert config.epochs == 3
+    assert config.data.image_size == 32
+    assert config.tensorboard.enabled is False
 
 
 def test_log_metrics_to_tensorboard_records_scalars_and_text() -> None:
@@ -111,3 +143,54 @@ def test_log_metrics_to_tensorboard_records_scalars_and_text() -> None:
 
     assert writer.scalars == [("loaded", 1.0, 7)]
     assert writer.texts == [("path", "checkpoint.pt", 7)]
+
+
+def test_random_block_mask_sampler_marks_square_region() -> None:
+    sampler = RandomBlockMaskSampler(image_size=16, patch_size=4, min_hole_patches=1, max_hole_patches=2)
+    mask = sampler.sample(2, device=torch.device("cpu"))
+    assert mask.shape == (2, 1, 16, 16)
+    assert float(mask.max()) == 1.0
+    assert float(mask.min()) == 0.0
+
+
+def test_semantic_inpainting_model_forward_shapes() -> None:
+    model = SemanticInpaintingModel(image_size=16, patch_size=4, token_dim=8, decoder_hidden_dim=16)
+    image = torch.rand(2, 3, 16, 16)
+    mask = torch.zeros(2, 1, 16, 16)
+    mask[:, :, :4, :4] = 1.0
+    outputs = model(image, mask)
+    assert outputs["predicted_hole_tokens"].shape == (2, 1, 8)
+    assert outputs["teacher_hole_tokens"].shape == (2, 1, 8)
+    assert outputs["reconstructed_image"].shape == (2, 3, 16, 16)
+
+
+def test_build_dataloader_loads_images(tmp_path) -> None:
+    image = Image.fromarray(np.full((16, 16, 3), 127, dtype=np.uint8))
+    image.save(tmp_path / "sample.png")
+
+    config = TrainConfig(image_dir=str(tmp_path)).normalize()
+    config.data.image_size = 16
+    config.data.batch_size = 1
+    dataloader = build_dataloader(config)
+    batch = next(iter(dataloader))
+    assert batch.shape == (1, 3, 16, 16)
+
+
+def test_run_training_executes_smoke_step(tmp_path) -> None:
+    for index in range(2):
+        image = Image.fromarray(np.full((16, 16, 3), 40 * (index + 1), dtype=np.uint8))
+        image.save(tmp_path / f"sample_{index}.png")
+
+    config = TrainConfig(image_dir=str(tmp_path), epochs=1, steps_per_epoch=1).normalize()
+    config.data.image_size = 16
+    config.data.batch_size = 1
+    config.mask.patch_size = 4
+    config.model.token_dim = 8
+    config.model.decoder_hidden_dim = 16
+    config.tensorboard.enabled = False
+
+    metrics = run_training(config)
+
+    assert metrics["epochs"] == 1.0
+    assert metrics["dataset_size"] == 2.0
+    assert "epoch_0_loss" in metrics
