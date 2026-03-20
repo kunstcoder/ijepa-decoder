@@ -12,6 +12,11 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
+try:
+    from tqdm.auto import tqdm
+except ModuleNotFoundError:  # pragma: no cover - depends on optional dependency
+    tqdm = None
+
 from data.mask_samplers import PatchMaskConverter, apply_pixel_mask
 from models.decoder_baseline import ConvDecoder
 from models.hole_token_scatter import reshape_token_canvas, scatter_hole_tokens
@@ -34,6 +39,12 @@ class TensorBoardConfig:
     enabled: bool = True
     log_dir: str = "runs/semantic_inpaint"
     flush_secs: int = 10
+
+
+@dataclass
+class ProgressConfig:
+    enabled: bool = True
+    refresh_rate: int = 1
 
 
 @dataclass
@@ -79,6 +90,7 @@ class TrainConfig:
     seed: int = 0
     device: str = "cpu"
     tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
+    progress: ProgressConfig = field(default_factory=ProgressConfig)
     data: DataConfig = field(default_factory=DataConfig)
     mask: MaskConfig = field(default_factory=MaskConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -94,14 +106,34 @@ class TrainConfig:
 
 
 class ImageFolderDataset(Dataset[torch.Tensor]):
+    IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
+
     def __init__(self, image_dir: str | Path, image_size: int) -> None:
         self.image_dir = Path(image_dir)
         self.image_size = image_size
-        self.files = sorted(
-            path for path in self.image_dir.rglob("*") if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
-        )
+        self.files = self._discover_files()
         if not self.files:
             raise ValueError(f"No image files were found under {self.image_dir}")
+
+    def _discover_files(self) -> list[Path]:
+        discovered: list[Path] = []
+        broken_symlinks: list[Path] = []
+        for path in sorted(self.image_dir.rglob("*")):
+            if path.suffix.lower() not in self.IMAGE_SUFFIXES:
+                continue
+            if path.is_symlink() and not path.exists():
+                broken_symlinks.append(path)
+                continue
+            if not path.is_file():
+                continue
+            discovered.append(path)
+        if broken_symlinks:
+            preview = ", ".join(str(path.relative_to(self.image_dir)) for path in broken_symlinks[:3])
+            raise ValueError(
+                f"Found {len(broken_symlinks)} broken image symlinks under {self.image_dir}. "
+                f"Examples: {preview}"
+            )
+        return discovered
 
     def __len__(self) -> int:
         return len(self.files)
@@ -358,12 +390,19 @@ def train_one_epoch(
     epoch_index: int,
     writer: SummaryWriter | None,
     steps_per_epoch: int | None,
+    progress_enabled: bool,
+    progress_refresh_rate: int,
 ) -> dict[str, float]:
     model.train()
     running = {"loss": 0.0, "semantic_loss": 0.0, "reconstruction_loss": 0.0}
     total_steps = 0
+    epoch_steps = steps_per_epoch or len(dataloader)
+    iterator = enumerate(dataloader)
+    progress_bar = None
+    if progress_enabled and tqdm is not None:
+        progress_bar = tqdm(total=epoch_steps, desc=f"Epoch {epoch_index + 1}", leave=True)
 
-    for step_index, batch in enumerate(dataloader):
+    for step_index, batch in iterator:
         if steps_per_epoch is not None and step_index >= steps_per_epoch:
             break
 
@@ -396,6 +435,25 @@ def train_one_epoch(
             global_step=global_step,
         )
         total_steps += 1
+        if progress_bar is not None:
+            progress_bar.update(1)
+            if step_index % max(1, progress_refresh_rate) == 0:
+                progress_bar.set_postfix(
+                    loss=f"{running['loss'] / total_steps:.4f}",
+                    semantic=f"{running['semantic_loss'] / total_steps:.4f}",
+                    reconstruction=f"{running['reconstruction_loss'] / total_steps:.4f}",
+                )
+        elif progress_enabled:
+            print(
+                f"[epoch {epoch_index + 1} step {step_index + 1}/{epoch_steps}] "
+                f"loss={running['loss'] / total_steps:.4f} "
+                f"semantic={running['semantic_loss'] / total_steps:.4f} "
+                f"reconstruction={running['reconstruction_loss'] / total_steps:.4f}",
+                flush=True,
+            )
+
+    if progress_bar is not None:
+        progress_bar.close()
 
     if total_steps == 0:
         raise ValueError("No training steps were executed. Check steps_per_epoch and dataset size.")
@@ -407,6 +465,11 @@ def run_training(config: TrainConfig, *, writer: SummaryWriter | None = None) ->
     set_seed(config.seed)
     device = torch.device(config.device)
     dataloader = build_dataloader(config)
+    print(
+        f"Loaded {len(dataloader.dataset)} images from {config.image_dir or config.data.image_dir} "
+        f"(batch_size={config.data.batch_size}, num_workers={config.data.num_workers})",
+        flush=True,
+    )
     model = SemanticInpaintingModel(
         image_size=config.data.image_size,
         patch_size=config.mask.patch_size,
@@ -444,6 +507,8 @@ def run_training(config: TrainConfig, *, writer: SummaryWriter | None = None) ->
             epoch_index=epoch_index,
             writer=writer,
             steps_per_epoch=config.steps_per_epoch,
+            progress_enabled=config.progress.enabled,
+            progress_refresh_rate=config.progress.refresh_rate,
         )
         summary.update({f"epoch_{epoch_index}_{key}": value for key, value in epoch_metrics.items()})
 

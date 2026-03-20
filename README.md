@@ -94,6 +94,10 @@ tensorboard:
   log_dir: runs/semantic_inpaint
   flush_secs: 10
 
+progress:
+  enabled: true
+  refresh_rate: 1
+
 data:
   image_dir: data/train_images
   image_size: 64
@@ -118,6 +122,10 @@ loss:
   lambda_jepa: 1.0
   lambda_rgb: 0.5
 ```
+
+학습 실행 시에는 데이터셋 로딩 직후 `Loaded ... images from ...` 형태의 요약이 먼저 출력되고, `tqdm`이 설치되어 있으면 epoch별 progress bar가 함께 표시된다. `tqdm`이 없더라도 step별 loss 로그를 stdout으로 남기도록 되어 있다.
+
+또한 Food-101처럼 `train/<class_name>/*.jpg` 아래에 **symlink된 이미지 파일**이 들어 있는 구조도 그대로 읽는다. 반대로 깨진 symlink가 섞여 있으면 시작 시점에 즉시 에러를 내서 어느 링크가 문제인지 확인할 수 있다.
 
 학습 실행 커맨드는 짧게 유지할 수 있다.
 
